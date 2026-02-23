@@ -1,0 +1,13 @@
+PLACEHOLDER - Este arquivo deve ser substituído pelo targets.mind real gerado pelo MindAR Compiler.
+
+Para gerar o arquivo correto:
+1. Acesse https://hiukim.github.io/mind-ar-js-doc/tools/compile/
+2. Faça upload da imagem que será usada como alvo (quadro/foto)
+3. Baixe o arquivo targets.mind gerado
+4. Substitua este arquivo pelo arquivo baixado
+
+A imagem-alvo deve ter:
+- Alto contraste
+- Muitos detalhes e bordas
+- Resolução mínima de 1000x1000 pixels
+- Sem reflexos ou brilho
