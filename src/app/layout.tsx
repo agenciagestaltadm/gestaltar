@@ -38,12 +38,30 @@ export const metadata: Metadata = {
     index: true,
     follow: true,
   },
+  // iOS specific meta tags
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "GUESTALT AR",
+  },
+  // Prevent phone number detection
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  userScalable: false,
+  // iOS safe area support
+  viewportFit: "cover",
+  // Theme color for mobile browsers
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#000000" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+  ],
 };
 
 export default function RootLayout({
@@ -53,6 +71,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR" className={`${montserrat.variable} ${inter.variable}`}>
+      <head>
+        {/* Additional iOS meta tags */}
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        {/* Prevent zoom on iOS input focus */}
+        <style dangerouslySetInnerHTML={{ __html: `
+          input, select, textarea { font-size: 16px; }
+        `}} />
+      </head>
       <body className="bg-guestalt-black text-guestalt-white antialiased">
         {children}
       </body>
