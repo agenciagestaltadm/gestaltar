@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import AROverlay from "./AROverlay";
 
 interface ARSceneProps {
@@ -8,17 +8,18 @@ interface ARSceneProps {
   targetUrl: string;
 }
 
-type CameraErrorType = "not_supported" | "not_allowed" | "not_found" | "not_readable" | "unknown";
+type ARState = "loading" | "requesting_permission" | "initializing" | "ready" | "error";
 
-interface CameraError {
-  type: CameraErrorType;
+interface ARError {
+  title: string;
   message: string;
+  instructions?: string;
 }
 
 // Detect device type
-function detectDevice(): { isIOS: boolean; isAndroid: boolean; isMobile: boolean } {
+function detectDevice(): { isIOS: boolean; isAndroid: boolean; isMobile: boolean; isSafari: boolean } {
   if (typeof navigator === "undefined") {
-    return { isIOS: false, isAndroid: false, isMobile: false };
+    return { isIOS: false, isAndroid: false, isMobile: false, isSafari: false };
   }
   
   const ua = navigator.userAgent;
@@ -26,200 +27,282 @@ function detectDevice(): { isIOS: boolean; isAndroid: boolean; isMobile: boolean
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/.test(ua);
   const isMobile = isIOS || isAndroid;
+  const isSafari = /Safari/.test(ua) && /AppleWebKit/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
   
-  return { isIOS, isAndroid, isMobile };
+  return { isIOS, isAndroid, isMobile, isSafari };
 }
 
-// Get error instructions based on device
-function getErrorInstructions(errorType: CameraErrorType, isIOS: boolean, isAndroid: boolean): string {
-  if (errorType === "not_allowed") {
-    if (isIOS) {
-      return "Ajustes > Safari > Câmera > Permitir";
-    }
-    if (isAndroid) {
-      return "Configurações > Apps > [Navegador] > Permissões > Câmera";
-    }
-    return "Clique no ícone de câmera na barra de endereços e permita o acesso.";
+// Check if target URL is valid
+async function checkTargetExists(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+    return response.ok;
+  } catch {
+    return false;
   }
-  
-  if (errorType === "not_found") {
-    return "Verifique se seu dispositivo possui uma câmera conectada.";
-  }
-  
-  if (errorType === "not_readable") {
-    return "Feche outros aplicativos que possam estar usando a câmera.";
-  }
-  
-  return "Tente recarregar a página ou usar um navegador diferente.";
 }
 
 export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
+  const [arState, setArState] = useState<ARState>("loading");
   const [isTargetFound, setIsTargetFound] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [needsUserInteraction, setNeedsUserInteraction] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [cameraError, setCameraError] = useState<CameraError | null>(null);
-  const [deviceInfo, setDeviceInfo] = useState({ isIOS: false, isAndroid: false, isMobile: false });
+  const [error, setError] = useState<ARError | null>(null);
+  const [deviceInfo, setDeviceInfo] = useState({ isIOS: false, isAndroid: false, isMobile: false, isSafari: false });
+  const [loadingMessage, setLoadingMessage] = useState("Preparando experiência AR...");
+  const [effectiveTargetUrl, setEffectiveTargetUrl] = useState<string>(targetUrl);
+  
+  const sceneRef = useRef<HTMLDivElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const isInitializedRef = useRef(false);
 
   // Detect device on mount
   useEffect(() => {
     const device = detectDevice();
     setDeviceInfo(device);
     
-    // iOS requires user interaction for autoplay
     if (device.isIOS) {
       setNeedsUserInteraction(true);
     }
   }, []);
 
-  // Check camera permission before initializing AR
-  const checkCameraPermission = useCallback(async (): Promise<boolean> => {
-    // Check if getUserMedia is supported
+  // Check and set target URL
+  useEffect(() => {
+    const checkTarget = async () => {
+      // Check if the provided target URL exists
+      const exists = await checkTargetExists(targetUrl);
+      
+      if (!exists) {
+        console.warn("Target URL not found, using demo target from CDN");
+        // Use MindAR demo target from CDN
+        setEffectiveTargetUrl("https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/card.mind");
+      } else {
+        setEffectiveTargetUrl(targetUrl);
+      }
+    };
+    
+    checkTarget();
+  }, [targetUrl]);
+
+  // Request camera permission
+  const requestCameraPermission = useCallback(async (): Promise<boolean> => {
+    setArState("requesting_permission");
+    setLoadingMessage("Solicitando permissão de câmera...");
+    
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setCameraError({
-        type: "not_supported",
-        message: "Seu navegador não suporta acesso à câmera. Use um navegador moderno.",
+      setError({
+        title: "Navegador não suportado",
+        message: "Seu navegador não suporta acesso à câmera.",
+        instructions: "Use Chrome, Safari, Firefox ou Edge em suas versões mais recentes.",
       });
+      setArState("error");
       return false;
     }
 
     try {
-      // Request camera permission with preferred settings for AR
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // Request camera with ideal settings for AR
+      const constraints: MediaStreamConstraints = {
         video: {
-          facingMode: "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280, min: 640 },
+          height: { ideal: 720, min: 480 },
         },
         audio: false,
-      });
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
       
-      // Permission granted - stop the test stream
+      // Stop the test stream - MindAR will create its own
       stream.getTracks().forEach(track => track.stop());
+      
       return true;
     } catch (err) {
-      const error = err as DOMException;
-      let errorType: CameraErrorType = "unknown";
-      let message = "Erro desconhecido ao acessar a câmera.";
+      const domError = err as DOMException;
       
-      switch (error.name) {
+      switch (domError.name) {
         case "NotAllowedError":
         case "PermissionDeniedError":
-          errorType = "not_allowed";
-          message = "Permissão de câmera negada. Habilite o acesso nas configurações.";
+          setError({
+            title: "Permissão negada",
+            message: "Você precisa permitir o acesso à câmera para usar a realidade aumentada.",
+            instructions: deviceInfo.isIOS 
+              ? "Ajustes > Safari > Câmera > Permitir" 
+              : deviceInfo.isAndroid 
+                ? "Configurações > Apps > Navegador > Permissões > Câmera"
+                : "Clique no ícone de câmera na barra de endereços e permita o acesso.",
+          });
           break;
         case "NotFoundError":
-        case "DevicesNotFoundError":
-          errorType = "not_found";
-          message = "Nenhuma câmera encontrada no dispositivo.";
+          setError({
+            title: "Câmera não encontrada",
+            message: "Nenhuma câmera foi detectada no seu dispositivo.",
+            instructions: "Verifique se seu dispositivo possui uma câmera e se ela está funcionando corretamente.",
+          });
           break;
         case "NotReadableError":
-        case "TrackStartError":
-          errorType = "not_readable";
-          message = "A câmera está sendo usada por outro aplicativo.";
-          break;
-        case "OverconstrainedError":
-          // Try again without constraints
-          try {
-            const fallbackStream = await navigator.mediaDevices.getUserMedia({
-              video: true,
-              audio: false,
-            });
-            fallbackStream.getTracks().forEach(track => track.stop());
-            return true;
-          } catch {
-            errorType = "not_readable";
-            message = "Não foi possível acessar a câmera com as configurações necessárias.";
-          }
+          setError({
+            title: "Câmera em uso",
+            message: "A câmera está sendo usada por outro aplicativo.",
+            instructions: "Feche outros aplicativos que possam estar usando a câmera e tente novamente.",
+          });
           break;
         default:
-          message = `Erro ao acessar câmera: ${error.message || "Erro desconhecido"}`;
+          setError({
+            title: "Erro de câmera",
+            message: `Não foi possível acessar a câmera: ${domError.message || "Erro desconhecido"}`,
+            instructions: "Tente recarregar a página ou usar um navegador diferente.",
+          });
       }
       
-      setCameraError({
-        type: errorType,
-        message,
-      });
+      setArState("error");
       return false;
     }
-  }, []);
+  }, [deviceInfo]);
 
-  // Initialize MindAR scene
-  useEffect(() => {
-    const initAR = async () => {
-      try {
-        setIsLoading(true);
+  // Initialize AR scene
+  const initializeAR = useCallback(async () => {
+    if (isInitializedRef.current) return;
+    isInitializedRef.current = true;
+    
+    setArState("initializing");
+    setLoadingMessage("Inicializando realidade aumentada...");
 
-        // First check camera permission
-        const hasPermission = await checkCameraPermission();
-        if (!hasPermission) {
-          setIsLoading(false);
-          return;
-        }
-
-        // Wait for A-Frame and MindAR to be ready
-        await new Promise<void>((resolve, reject) => {
-          if (typeof window === "undefined") {
-            reject(new Error("Window not available"));
-            return;
-          }
-          
-          if ((window as any).AFRAME) {
+    try {
+      // Wait for A-Frame to be ready
+      await new Promise<void>((resolve, reject) => {
+        const maxWait = 15000; // 15 seconds max
+        const startTime = Date.now();
+        
+        const checkAFrame = setInterval(() => {
+          if (typeof window !== "undefined" && (window as any).AFRAME) {
+            clearInterval(checkAFrame);
             resolve();
-            return;
+          } else if (Date.now() - startTime > maxWait) {
+            clearInterval(checkAFrame);
+            reject(new Error("A-Frame não carregou. Verifique sua conexão e desative bloqueadores de anúncios."));
           }
-          
-          let attempts = 0;
-          const maxAttempts = 50; // 5 seconds max
-          
-          const checkAFrame = setInterval(() => {
-            attempts++;
-            if ((window as any).AFRAME) {
-              clearInterval(checkAFrame);
-              resolve();
-            } else if (attempts >= maxAttempts) {
-              clearInterval(checkAFrame);
-              reject(new Error("A-Frame não carregou. Verifique sua conexão."));
-            }
-          }, 100);
-        });
+        }, 100);
+      });
 
-        // Get the scene element
-        const scene = document.querySelector("a-scene");
-        if (scene) {
-          // Listen for target found/lost events
-          scene.addEventListener("targetFound", () => {
-            setIsTargetFound(true);
-          });
+      setLoadingMessage("Carregando componentes AR...");
 
-          scene.addEventListener("targetLost", () => {
-            setIsTargetFound(false);
-            setIsVideoPlaying(false);
-          });
-          
-          // Listen for camera errors from MindAR
-          scene.addEventListener("camera-error", (event: any) => {
-            console.error("MindAR camera error:", event);
-            setCameraError({
-              type: "unknown",
-              message: "Erro ao inicializar a câmera do AR.",
+      // Small delay to ensure A-Frame is fully initialized
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Create the AR scene
+      if (sceneRef.current) {
+        const sceneHTML = `
+          <a-scene
+            mindar-image="imageSrc: ${effectiveTargetUrl}; autoStart: true; uiLoading: no; uiError: no; uiScanning: yes;"
+            color-space="sRGB"
+            embedded
+            vr-mode-ui="enabled: false"
+            device-orientation-permission-ui="enabled: false"
+            renderer="logarithmicDepthBuffer: true; antialias: true; alpha: true"
+          >
+            <a-assets>
+              <video
+                id="ar-video"
+                src="${videoUrl}"
+                preload="auto"
+                muted
+                playsinline
+                webkit-playsinline
+                loop
+                crossorigin="anonymous"
+              />
+            </a-assets>
+            <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+            <a-entity mindar-image-target="targetIndex: 0">
+              <a-video
+                src="#ar-video"
+                position="0 0 0"
+                rotation="0 0 0"
+                width="1"
+                height="0.5625"
+              ></a-video>
+            </a-entity>
+          </a-scene>
+        `;
+        
+        sceneRef.current.innerHTML = sceneHTML;
+        
+        // Wait for scene to initialize
+        setTimeout(() => {
+          const scene = sceneRef.current?.querySelector("a-scene");
+          if (scene) {
+            // Listen for scene loaded
+            scene.addEventListener("loaded", () => {
+              console.log("AR Scene loaded");
+              setArState("ready");
             });
-          });
-        }
+            
+            // Listen for target events
+            scene.addEventListener("targetFound", () => {
+              console.log("Target found");
+              setIsTargetFound(true);
+            });
+            
+            scene.addEventListener("targetLost", () => {
+              console.log("Target lost");
+              setIsTargetFound(false);
+              setIsVideoPlaying(false);
+            });
+            
+            // Listen for camera errors
+            scene.addEventListener("camera-error", (event: any) => {
+              console.error("Camera error:", event);
+              setError({
+                title: "Erro de câmera",
+                message: "Não foi possível acessar a câmera.",
+                instructions: "Verifique as permissões do navegador e tente novamente.",
+              });
+              setArState("error");
+            });
+            
+            // Set ready after a timeout
+            setTimeout(() => {
+              setArState("ready");
+            }, 2000);
+          }
+        }, 1000);
+      }
+    } catch (err) {
+      console.error("AR initialization error:", err);
+      setError({
+        title: "Erro de inicialização",
+        message: err instanceof Error ? err.message : "Falha ao inicializar o AR.",
+        instructions: "Tente recarregar a página ou usar um navegador diferente.",
+      });
+      setArState("error");
+    }
+  }, [effectiveTargetUrl, videoUrl]);
 
-        setIsLoading(false);
-      } catch (error) {
-        console.error("AR initialization error:", error);
-        setCameraError({
-          type: "unknown",
-          message: error instanceof Error ? error.message : "Falha ao inicializar a câmera.",
-        });
-        setIsLoading(false);
+  // Main initialization flow
+  useEffect(() => {
+    if (!effectiveTargetUrl || effectiveTargetUrl === targetUrl && !videoUrl) return;
+    
+    const init = async () => {
+      setArState("loading");
+      
+      // Request camera permission first
+      const hasPermission = await requestCameraPermission();
+      if (!hasPermission) return;
+      
+      // Initialize AR
+      await initializeAR();
+    };
+    
+    init();
+    
+    // Cleanup
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-
-    initAR();
-  }, [checkCameraPermission]);
+  }, [effectiveTargetUrl, requestCameraPermission, initializeAR, targetUrl, videoUrl]);
 
   // Handle video play
   const handlePlayVideo = useCallback(() => {
@@ -228,14 +311,14 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
       video.play().then(() => {
         setIsVideoPlaying(true);
         setNeedsUserInteraction(false);
-      }).catch((error) => {
-        console.error("Video play error:", error);
+      }).catch((err) => {
+        console.error("Video play error:", err);
         setNeedsUserInteraction(true);
       });
     }
   }, []);
 
-  // Auto-play when target found (if no user interaction needed)
+  // Auto-play when target found
   useEffect(() => {
     if (isTargetFound && !needsUserInteraction && !isVideoPlaying) {
       handlePlayVideo();
@@ -252,41 +335,34 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
     }
   }, [isTargetFound]);
 
+  // Retry function
+  const handleRetry = useCallback(() => {
+    setError(null);
+    setArState("loading");
+    isInitializedRef.current = false;
+    window.location.reload();
+  }, []);
+
   // Error state
-  if (cameraError) {
+  if (arState === "error" && error) {
     return (
       <div className="fixed inset-0 bg-guestalt-black flex items-center justify-center p-4">
         <div className="text-center max-w-md">
           <div className="w-16 h-16 rounded-full bg-red-500/20 flex items-center justify-center mx-auto mb-4">
-            <svg
-              className="w-8 h-8 text-red-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-              />
+            <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
-          <p className="text-white text-lg mb-2">{cameraError.message}</p>
-          <p className="text-guestalt-gray-light text-sm mb-6">
-            {getErrorInstructions(cameraError.type, deviceInfo.isIOS, deviceInfo.isAndroid)}
-          </p>
+          <h2 className="text-white text-xl font-bold mb-2">{error.title}</h2>
+          <p className="text-guestalt-gray-light mb-2">{error.message}</p>
+          {error.instructions && (
+            <p className="text-guestalt-gray-light text-sm mb-6 p-3 bg-white/5 rounded-lg">{error.instructions}</p>
+          )}
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <button
-              onClick={() => window.location.reload()}
-              className="px-6 py-3 bg-white text-black rounded-lg font-semibold hover:bg-gray-100 transition-colors"
-            >
+            <button onClick={handleRetry} className="px-6 py-3 bg-white text-black rounded-lg font-semibold hover:bg-gray-100 transition-colors">
               Tentar novamente
             </button>
-            <a
-              href="/"
-              className="px-6 py-3 bg-guestalt-gray-medium text-white rounded-lg font-semibold hover:bg-guestalt-gray-light/20 transition-colors"
-            >
+            <a href="/" className="px-6 py-3 bg-guestalt-gray-medium text-white rounded-lg font-semibold hover:bg-guestalt-gray-light/20 transition-colors">
               Voltar ao início
             </a>
           </div>
@@ -295,60 +371,27 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
     );
   }
 
+  // Loading state
+  if (arState === "loading" || arState === "requesting_permission" || arState === "initializing") {
+    return (
+      <div className="fixed inset-0 bg-guestalt-black flex items-center justify-center z-50">
+        <div className="text-center px-4">
+          <div className="w-12 h-12 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-white">{loadingMessage}</p>
+          {deviceInfo.isIOS && arState === "requesting_permission" && (
+            <p className="text-guestalt-gray-light text-sm mt-2">Toque em "Permitir" quando solicitado</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Ready state - render AR scene
   return (
     <div className="ar-container">
-      {/* Loading overlay */}
-      {isLoading && (
-        <div className="fixed inset-0 bg-guestalt-black flex items-center justify-center z-50">
-          <div className="text-center px-4">
-            <div className="w-12 h-12 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-white">Iniciando câmera...</p>
-            <p className="text-guestalt-gray-light text-sm mt-2">
-              {deviceInfo.isIOS ? "Toque em 'Permitir' quando solicitado" : "Aguarde a inicialização"}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* MindAR Scene - rendered as HTML to avoid TypeScript issues */}
-      <div
-        dangerouslySetInnerHTML={{
-          __html: `
-            <a-scene
-              mindar-image="imageSrc: ${targetUrl}; autoStart: true; uiLoading: no; uiError: no; uiScanning: yes;"
-              color-space="sRGB"
-              embedded
-              vr-mode-ui="enabled: false"
-              device-orientation-permission-ui="enabled: false"
-              renderer="logarithmicDepthBuffer: true; antialias: true; alpha: true"
-            >
-              <a-assets>
-                <video
-                  id="ar-video"
-                  src="${videoUrl}"
-                  preload="auto"
-                  muted
-                  playsinline
-                  loop
-                  crossorigin="anonymous"
-                  webkit-playsinline
-                />
-              </a-assets>
-              <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
-              <a-entity mindar-image-target="targetIndex: 0">
-                <a-video
-                  src="#ar-video"
-                  position="0 0 0"
-                  rotation="0 0 0"
-                  width="1"
-                  height="0.5625"
-                ></a-video>
-              </a-entity>
-            </a-scene>
-          `,
-        }}
-      />
-
+      {/* Scene container */}
+      <div ref={sceneRef} />
+      
       {/* Overlay UI */}
       <AROverlay
         isTargetFound={isTargetFound}

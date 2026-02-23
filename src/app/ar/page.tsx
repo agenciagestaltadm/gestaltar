@@ -4,6 +4,10 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 
+// Demo video URL from MindAR examples
+const DEMO_VIDEO_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/kanji.mp4";
+const DEMO_TARGET_URL = "/targets.mind";
+
 // Dynamic import for ARScene (client-side only)
 const ARScene = dynamic(() => import("@/components/ar/ARScene"), {
   ssr: false,
@@ -35,25 +39,27 @@ function ARPageContent() {
           const response = await fetch(`/api/videos/${videoId}`);
 
           if (!response.ok) {
-            // If video not found, use demo video and default target
-            setVideoUrl("/demo-video.mp4");
-            setTargetUrl("/targets.mind");
+            // If video not found, use demo video
+            console.log("Video not found, using demo");
+            setVideoUrl(DEMO_VIDEO_URL);
+            setTargetUrl(DEMO_TARGET_URL);
           } else {
             const data = await response.json();
             setVideoUrl(data.signedUrl);
             // Use custom target if available, otherwise use default
-            setTargetUrl(data.targetUrl || "/targets.mind");
+            setTargetUrl(data.targetUrl || DEMO_TARGET_URL);
           }
         } else {
-          // No video ID, use demo video and default target
-          setVideoUrl("/demo-video.mp4");
-          setTargetUrl("/targets.mind");
+          // No video ID, use demo video
+          console.log("No video ID, using demo");
+          setVideoUrl(DEMO_VIDEO_URL);
+          setTargetUrl(DEMO_TARGET_URL);
         }
       } catch (err) {
         console.error("Error loading video:", err);
         setError("Falha ao carregar o vídeo. Usando vídeo de demonstração.");
-        setVideoUrl("/demo-video.mp4");
-        setTargetUrl("/targets.mind");
+        setVideoUrl(DEMO_VIDEO_URL);
+        setTargetUrl(DEMO_TARGET_URL);
       } finally {
         setIsLoading(false);
       }
