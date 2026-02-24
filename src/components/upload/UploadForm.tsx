@@ -4,12 +4,13 @@ import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import VideoUploader from "./VideoUploader";
 import { Button } from "@/components/ui";
+import { compileTarget, validateImageForTracking, loadImageData } from "@/lib/mindar";
+import { compressVideo, getVideoInfo, isCompressionSupported } from "@/lib/video";
+import { trackEvent } from "@/lib/analytics";
+import { DEMO_TARGET_URL, DEMO_TARGET_IMAGE_URL } from "@/lib/ar";
 
 const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
 const MAX_TARGET_SIZE = 10 * 1024 * 1024; // 10MB
-
-// MindAR target compiler constants
-const COMPILER_VERSION = "1.2.0";
 
 export default function UploadForm() {
   const router = useRouter();
@@ -19,7 +20,10 @@ export default function UploadForm() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [targetProgress, setTargetProgress] = useState<string>("");
+  const [statusMessage, setStatusMessage] = useState<string>("");
+  const [useCustomTarget, setUseCustomTarget] = useState(false);
+  const [targetPreview, setTargetPreview] = useState<string | null>(null);
+  const [targetValidation, setTargetValidation] = useState<{ valid: boolean; message: string } | null>(null);
 
   const handleFileSelect = useCallback((file: File) => {
     setSelectedFile(file);
@@ -31,153 +35,35 @@ export default function UploadForm() {
     }
   }, []);
 
-  const handleTargetImageSelect = useCallback((file: File) => {
+  const handleTargetImageSelect = useCallback(async (file: File) => {
     setSelectedTargetImage(file);
     setError(null);
+    setTargetValidation(null);
 
     if (file.size > MAX_TARGET_SIZE) {
       setError("A imagem-alvo excede o tamanho máximo de 10MB.");
       setSelectedTargetImage(null);
+      return;
+    }
+
+    // Create preview
+    const previewUrl = URL.createObjectURL(file);
+    setTargetPreview(previewUrl);
+
+    // Validate image for tracking
+    try {
+      const imageData = await loadImageData(file);
+      const validation = validateImageForTracking(imageData);
+      setTargetValidation(validation);
+
+      if (!validation.valid) {
+        setError(validation.message);
+      }
+    } catch (err) {
+      setError("Falha ao processar imagem. Tente outra imagem.");
+      setSelectedTargetImage(null);
     }
   }, []);
-
-  // Generate targets.mind from image using MindAR compiler
-  const generateTargetFile = async (imageFile: File): Promise<Blob> => {
-    setTargetProgress("Processando imagem-alvo...");
-
-    // Load the image
-    const imageData = await loadImage(imageFile);
-    
-    // Use MindAR compiler to generate target
-    // This is a simplified implementation that creates a basic target
-    // In production, you would use the full MindAR compiler
-    
-    const targetData = await compileTarget(imageData);
-    
-    setTargetProgress("Target gerado com sucesso!");
-    return new Blob([targetData], { type: "application/octet-stream" });
-  };
-
-  // Load image and get pixel data
-  const loadImage = async (file: File): Promise<ImageData> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        
-        // Create canvas and draw image
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        
-        if (!ctx) {
-          reject(new Error("Failed to get canvas context"));
-          return;
-        }
-        
-        // Resize to max 1000px while maintaining aspect ratio
-        const maxSize = 1000;
-        let width = img.width;
-        let height = img.height;
-        
-        if (width > maxSize || height > maxSize) {
-          if (width > height) {
-            height = (height / width) * maxSize;
-            width = maxSize;
-          } else {
-            width = (width / height) * maxSize;
-            height = maxSize;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        const imageData = ctx.getImageData(0, 0, width, height);
-        resolve(imageData);
-      };
-      
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("Failed to load image"));
-      };
-      
-      img.src = url;
-    });
-  };
-
-  // Compile target using MindAR algorithm
-  const compileTarget = async (imageData: ImageData): Promise<ArrayBuffer> => {
-    // This is a placeholder implementation
-    // The actual MindAR compiler uses complex computer vision algorithms
-    // For production, you should use the official MindAR compiler API
-    
-    // Create a minimal valid targets.mind structure
-    // This will work with MindAR but won't have optimal tracking
-    
-    const targetJson = {
-      targetImages: [{
-        width: imageData.width,
-        height: imageData.height,
-        data: Array.from(imageData.data),
-        featurePoints: generateFeaturePoints(imageData),
-      }],
-      version: COMPILER_VERSION,
-    };
-    
-    // Convert to binary format (simplified)
-    const jsonString = JSON.stringify(targetJson);
-    const encoder = new TextEncoder();
-    return encoder.encode(jsonString).buffer;
-  };
-
-  // Generate feature points for tracking
-  const generateFeaturePoints = (imageData: ImageData): Array<{x: number, y: number, score: number}> => {
-    const points: Array<{x: number, y: number, score: number}> = [];
-    const data = imageData.data;
-    const width = imageData.width;
-    const height = imageData.height;
-    
-    // Simple corner detection (Harris-like)
-    const blockSize = 8;
-    const threshold = 30;
-    
-    for (let y = blockSize; y < height - blockSize; y += blockSize) {
-      for (let x = blockSize; x < width - blockSize; x += blockSize) {
-        // Calculate gradient
-        const idx = (y * width + x) * 4;
-        const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-        
-        // Check if this is a corner-like point
-        const leftIdx = (y * width + (x - blockSize)) * 4;
-        const rightIdx = (y * width + (x + blockSize)) * 4;
-        const topIdx = ((y - blockSize) * width + x) * 4;
-        const bottomIdx = ((y + blockSize) * width + x) * 4;
-        
-        const leftGray = (data[leftIdx] + data[leftIdx + 1] + data[leftIdx + 2]) / 3;
-        const rightGray = (data[rightIdx] + data[rightIdx + 1] + data[rightIdx + 2]) / 3;
-        const topGray = (data[topIdx] + data[topIdx + 1] + data[topIdx + 2]) / 3;
-        const bottomGray = (data[bottomIdx] + data[bottomIdx + 1] + data[bottomIdx + 2]) / 3;
-        
-        const gradX = Math.abs(rightGray - leftGray);
-        const gradY = Math.abs(bottomGray - topGray);
-        
-        if (gradX > threshold && gradY > threshold) {
-          points.push({
-            x: x / width,
-            y: y / height,
-            score: (gradX + gradY) / 2,
-          });
-        }
-      }
-    }
-    
-    // Sort by score and take top points
-    points.sort((a, b) => b.score - a.score);
-    return points.slice(0, 300);
-  };
 
   const handleUpload = async () => {
     if (!selectedFile) {
@@ -185,63 +71,123 @@ export default function UploadForm() {
       return;
     }
 
-    if (!selectedTargetImage) {
-      setError("Por favor, selecione uma imagem-alvo.");
+    if (useCustomTarget && !selectedTargetImage) {
+      setError("Por favor, selecione uma imagem-alvo ou desative o target personalizado.");
       return;
     }
 
     setIsUploading(true);
     setError(null);
     setUploadProgress(0);
+    trackEvent("upload_start", { customTarget: useCustomTarget });
 
     try {
-      // Step 1: Generate targets.mind from image
-      setTargetProgress("Gerando arquivo de tracking...");
-      const targetBlob = await generateTargetFile(selectedTargetImage);
+      let targetBlob: Blob | null = null;
+      let targetUrl = DEMO_TARGET_URL;
 
-      // Step 2: Create video record with target
+      // Step 1: Generate custom target if needed
+      if (useCustomTarget && selectedTargetImage) {
+        setStatusMessage("Gerando target personalizado...");
+        setUploadProgress(5);
+
+        const targetBuffer = await compileTarget(selectedTargetImage, (progress) => {
+          setUploadProgress(5 + progress * 0.15); // 5-20%
+        });
+        targetBlob = new Blob([targetBuffer], { type: "application/octet-stream" });
+
+        setStatusMessage("Target gerado com sucesso!");
+        trackEvent("target_generated", { imageSize: selectedTargetImage.size });
+      }
+
+      // Step 2: Compress video if needed and supported
+      let videoToUpload = selectedFile;
+      const videoInfo = await getVideoInfo(selectedFile);
+
+      if (isCompressionSupported() && videoInfo.size > 50 * 1024 * 1024) {
+        setStatusMessage("Comprimindo vídeo...");
+        setUploadProgress(20);
+
+        try {
+          const result = await compressVideo(
+            selectedFile,
+            { maxSizeMB: 50, quality: "medium" },
+            (progress, stage) => {
+              setStatusMessage(stage);
+              setUploadProgress(20 + progress * 0.3); // 20-50%
+            }
+          );
+
+          videoToUpload = new File([result.blob], selectedFile.name, {
+            type: result.format === "mp4" ? "video/mp4" : "video/webm",
+          });
+
+          setStatusMessage(`Vídeo comprimido: ${Math.round(result.compressionRatio * 100)}% do tamanho original`);
+          trackEvent("video_compressed", {
+            originalSize: result.originalSize,
+            compressedSize: result.compressedSize,
+            ratio: result.compressionRatio,
+          });
+        } catch (compressError) {
+          console.warn("Video compression failed, using original:", compressError);
+          setStatusMessage("Usando vídeo original (compressão não disponível)");
+        }
+      }
+
+      // Step 3: Create video record
+      setStatusMessage("Criando registro do vídeo...");
+      setUploadProgress(50);
+
       const createResponse = await fetch("/api/videos", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          filename: selectedFile.name,
-          mimeType: selectedFile.type,
-          sizeBytes: selectedFile.size,
+          filename: videoToUpload.name,
+          mimeType: videoToUpload.type,
+          sizeBytes: videoToUpload.size,
           title: title || null,
-          hasTargetImage: true,
+          hasTargetImage: useCustomTarget && !!targetBlob,
         }),
       });
 
       if (!createResponse.ok) {
-        throw new Error("Falha ao criar registro do vídeo");
+        const errorData = await createResponse.json();
+        throw new Error(errorData.error || "Falha ao criar registro do vídeo");
       }
 
       const { videoId, uploadUrl, targetUploadUrl } = await createResponse.json();
 
-      // Step 3: Upload target file
-      setTargetProgress("Enviando arquivo de tracking...");
-      const targetUploadResponse = await fetch(targetUploadUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/octet-stream",
-        },
-        body: targetBlob,
-      });
+      // Step 4: Upload target file if custom
+      if (useCustomTarget && targetBlob && targetUploadUrl) {
+        setStatusMessage("Enviando target personalizado...");
+        setUploadProgress(55);
 
-      if (!targetUploadResponse.ok) {
-        throw new Error("Falha no upload do target");
+        const targetUploadResponse = await fetch(targetUploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/octet-stream",
+          },
+          body: targetBlob,
+        });
+
+        if (!targetUploadResponse.ok) {
+          console.warn("Target upload failed, using demo target");
+        } else {
+          targetUrl = `${window.location.origin}/api/targets/${videoId}`;
+        }
       }
 
-      // Step 4: Upload video with progress
-      setTargetProgress("Enviando vídeo...");
+      // Step 5: Upload video with progress
+      setStatusMessage("Enviando vídeo...");
+      setUploadProgress(60);
+
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
 
         xhr.upload.addEventListener("progress", (event) => {
           if (event.lengthComputable) {
-            const progress = (event.loaded / event.total) * 100;
+            const progress = 60 + (event.loaded / event.total) * 35; // 60-95%
             setUploadProgress(Math.round(progress));
           }
         });
@@ -259,11 +205,14 @@ export default function UploadForm() {
         });
 
         xhr.open("PUT", uploadUrl);
-        xhr.setRequestHeader("Content-Type", selectedFile.type);
-        xhr.send(selectedFile);
+        xhr.setRequestHeader("Content-Type", videoToUpload.type);
+        xhr.send(videoToUpload);
       });
 
-      // Step 5: Update video status
+      // Step 6: Update video status
+      setStatusMessage("Finalizando...");
+      setUploadProgress(95);
+
       await fetch(`/api/videos/${videoId}`, {
         method: "PATCH",
         headers: {
@@ -272,15 +221,19 @@ export default function UploadForm() {
         body: JSON.stringify({ status: "ready" }),
       });
 
+      setUploadProgress(100);
+      trackEvent("upload_complete", { videoId, customTarget: useCustomTarget });
+
       // Redirect to success page
-      router.push(`/success?vid=${videoId}`);
+      router.push(`/success?vid=${videoId}${useCustomTarget ? "&custom=1" : ""}`);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Ocorreu um erro durante o upload"
       );
+      trackEvent("upload_error", { error: err instanceof Error ? err.message : "unknown" });
       setIsUploading(false);
       setUploadProgress(0);
-      setTargetProgress("");
+      setStatusMessage("");
     }
   };
 
@@ -305,23 +258,132 @@ export default function UploadForm() {
         />
       </div>
 
-      {/* Video Uploader with Target Image */}
+      {/* Custom Target Toggle */}
+      <div className="mb-6 p-4 bg-guestalt-surface rounded-lg border border-guestalt-gray-medium">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={useCustomTarget}
+            onChange={(e) => setUseCustomTarget(e.target.checked)}
+            disabled={isUploading}
+            className="w-5 h-5 rounded border-guestalt-gray-medium bg-guestalt-surface text-white focus:ring-white"
+          />
+          <div>
+            <span className="text-white font-medium">Usar imagem personalizada como target</span>
+            <p className="text-guestalt-gray-light text-xs mt-1">
+              Se não selecionado, será usado o target padrão do sistema
+            </p>
+          </div>
+        </label>
+      </div>
+
+      {/* Target Image Upload (if custom) */}
+      {useCustomTarget && (
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-guestalt-gray-light mb-2">
+            Imagem-alvo (quadro) *
+          </label>
+          <div
+            className={`
+              relative border-2 border-dashed rounded-xl p-6 text-center cursor-pointer
+              transition-all duration-200 min-h-[120px] flex flex-col items-center justify-center
+              ${isUploading ? "pointer-events-none opacity-70" : "hover:border-guestalt-gray-light"}
+              ${selectedTargetImage ? "border-green-500/50" : "border-guestalt-gray-medium"}
+            `}
+            onClick={() => {
+              if (!isUploading) {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = "image/png,image/jpeg,image/webp";
+                input.onchange = (e) => {
+                  const files = (e.target as HTMLInputElement).files;
+                  if (files && files[0]) {
+                    handleTargetImageSelect(files[0]);
+                  }
+                };
+                input.click();
+              }
+            }}
+          >
+            {targetPreview ? (
+              <div className="text-center">
+                <img
+                  src={targetPreview}
+                  alt="Preview"
+                  className="w-32 h-32 object-cover rounded-lg mx-auto mb-2"
+                />
+                <p className="text-white text-sm">{selectedTargetImage?.name}</p>
+                {targetValidation && (
+                  <p className={`text-xs mt-1 ${targetValidation.valid ? "text-green-500" : "text-red-500"}`}>
+                    {targetValidation.message}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                <svg
+                  className="w-8 h-8 text-guestalt-gray-light mb-2"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                  />
+                </svg>
+                <p className="text-white text-sm font-medium">
+                  Clique para selecionar a imagem
+                </p>
+                <p className="text-guestalt-gray-light text-xs mt-1">
+                  PNG, JPG ou WebP (máx. 10MB)
+                </p>
+              </>
+            )}
+          </div>
+          <p className="text-guestalt-gray-light text-xs mt-2">
+            Esta imagem será usada como referência para o AR. O vídeo aparecerá sobre ela.
+            Use imagens com bom contraste e detalhes para melhor tracking.
+          </p>
+        </div>
+      )}
+
+      {/* Video Uploader */}
       <VideoUploader
         onFileSelect={handleFileSelect}
-        onTargetImageSelect={handleTargetImageSelect}
         isUploading={isUploading}
         uploadProgress={uploadProgress}
         error={error}
-        selectedTargetImage={selectedTargetImage}
       />
 
-      {/* Target Progress */}
-      {targetProgress && (
+      {/* Status Message */}
+      {statusMessage && (
         <div className="mt-4 p-3 bg-guestalt-surface rounded-lg border border-guestalt-gray-medium">
           <p className="text-guestalt-gray-light text-sm flex items-center gap-2">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-            {targetProgress}
+            {statusMessage}
           </p>
+        </div>
+      )}
+
+      {/* Target Info (if not custom) */}
+      {!useCustomTarget && (
+        <div className="mt-6 p-4 bg-guestalt-surface rounded-lg border border-guestalt-gray-medium">
+          <h3 className="text-white font-medium mb-2">📋 Sobre o target AR</h3>
+          <p className="text-guestalt-gray-light text-sm mb-3">
+            Seu vídeo será exibido sobre uma imagem de referência padrão.
+            Após o upload, você receberá instruções de como visualizar em AR.
+          </p>
+          <a
+            href={DEMO_TARGET_IMAGE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-white underline hover:no-underline"
+          >
+            Ver imagem de referência (target)
+          </a>
         </div>
       )}
 
@@ -337,7 +399,7 @@ export default function UploadForm() {
       <div className="mt-6">
         <Button
           onClick={handleUpload}
-          disabled={!selectedFile || !selectedTargetImage || isUploading}
+          disabled={!selectedFile || (useCustomTarget && !selectedTargetImage) || isUploading}
           isLoading={isUploading}
           fullWidth
           size="lg"

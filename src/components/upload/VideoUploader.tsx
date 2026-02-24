@@ -5,26 +5,20 @@ import { ProgressBar } from "@/components/ui";
 
 interface VideoUploaderProps {
   onFileSelect: (file: File) => void;
-  onTargetImageSelect?: (file: File) => void;
   isUploading: boolean;
   uploadProgress: number;
   error: string | null;
-  selectedTargetImage?: File | null;
 }
 
 export default function VideoUploader({
   onFileSelect,
-  onTargetImageSelect,
   isUploading,
   uploadProgress,
   error,
-  selectedTargetImage,
 }: VideoUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [isDraggingTarget, setIsDraggingTarget] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const targetInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -67,51 +61,8 @@ export default function VideoUploader({
     [onFileSelect]
   );
 
-  const handleTargetDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingTarget(true);
-  }, []);
-
-  const handleTargetDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingTarget(false);
-  }, []);
-
-  const handleTargetDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setIsDraggingTarget(false);
-
-      const files = e.dataTransfer.files;
-      if (files.length > 0) {
-        const file = files[0];
-        if (file.type.startsWith("image/")) {
-          onTargetImageSelect?.(file);
-        } else {
-          alert("Por favor, selecione um arquivo de imagem válido.");
-        }
-      }
-    },
-    [onTargetImageSelect]
-  );
-
-  const handleTargetInput = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (files && files.length > 0) {
-        const file = files[0];
-        onTargetImageSelect?.(file);
-      }
-    },
-    [onTargetImageSelect]
-  );
-
   const handleClick = useCallback(() => {
     fileInputRef.current?.click();
-  }, []);
-
-  const handleTargetClick = useCallback(() => {
-    targetInputRef.current?.click();
   }, []);
 
   const formatFileSize = (bytes: number): string => {
@@ -124,72 +75,6 @@ export default function VideoUploader({
 
   return (
     <div className="w-full space-y-6">
-      {/* Target Image Upload */}
-      <div>
-        <label className="block text-sm font-medium text-guestalt-gray-light mb-2">
-          Imagem-alvo (quadro) *
-        </label>
-        <div
-          className={`
-            relative border-2 border-dashed rounded-xl p-6 text-center cursor-pointer
-            transition-all duration-200 min-h-[120px] flex flex-col items-center justify-center
-            ${
-              isDraggingTarget
-                ? "border-white bg-white/5"
-                : "border-guestalt-gray-medium hover:border-guestalt-gray-light"
-            }
-            ${isUploading ? "pointer-events-none opacity-70" : ""}
-          `}
-          onDragOver={handleTargetDragOver}
-          onDragLeave={handleTargetDragLeave}
-          onDrop={handleTargetDrop}
-          onClick={handleTargetClick}
-        >
-          <input
-            ref={targetInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            onChange={handleTargetInput}
-            className="hidden"
-            disabled={isUploading}
-          />
-
-          {!selectedTargetImage ? (
-            <>
-              <svg
-                className="w-8 h-8 text-guestalt-gray-light mb-2"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                />
-              </svg>
-              <p className="text-white text-sm font-medium">
-                Arraste a imagem ou clique para selecionar
-              </p>
-              <p className="text-guestalt-gray-light text-xs mt-1">
-                PNG, JPG ou WebP
-              </p>
-            </>
-          ) : (
-            <div className="text-center">
-              <p className="text-white font-medium text-sm">{selectedTargetImage.name}</p>
-              <p className="text-guestalt-gray-light text-xs">
-                {formatFileSize(selectedTargetImage.size)}
-              </p>
-            </div>
-          )}
-        </div>
-        <p className="text-guestalt-gray-light text-xs mt-2">
-          Esta imagem será usada como referência para o AR. O vídeo aparecerá sobre ela.
-        </p>
-      </div>
-
       {/* Video Upload */}
       <div>
         <label className="block text-sm font-medium text-guestalt-gray-light mb-2">
@@ -214,7 +99,7 @@ export default function VideoUploader({
           <input
             ref={fileInputRef}
             type="file"
-            accept="video/mp4,video/webm"
+            accept="video/mp4,video/webm,video/quicktime"
             onChange={handleFileInput}
             className="hidden"
             disabled={isUploading}
@@ -279,7 +164,7 @@ export default function VideoUploader({
       <div className="text-center space-y-1">
         <p className="text-guestalt-gray-light text-xs">
           Vídeo: <span className="text-white">MP4</span> (recomendado),{" "}
-          <span className="text-white">WebM</span> • Máx: <span className="text-white">200MB</span>
+          <span className="text-white">WebM</span>, <span className="text-white">MOV</span> • Máx: <span className="text-white">200MB</span>
         </p>
       </div>
     </div>

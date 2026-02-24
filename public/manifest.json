@@ -1,0 +1,44 @@
+{
+  "name": "GUESTALT AR",
+  "short_name": "GUESTALT AR",
+  "description": "Experiência de Realidade Aumentada - Aponte para o quadro e veja a imagem ganhar vida.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "orientation": "any",
+  "scope": "/",
+  "lang": "pt-BR",
+  "categories": ["entertainment", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Enviar Vídeo",
+      "short_name": "Upload",
+      "description": "Enviar um novo vídeo para AR",
+      "url": "/upload"
+    },
+    {
+      "name": "Ler Quadro AR",
+      "short_name": "AR",
+      "description": "Iniciar experiência de AR",
+      "url": "/ar"
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
+}

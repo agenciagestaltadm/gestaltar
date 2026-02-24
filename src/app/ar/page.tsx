@@ -3,10 +3,7 @@
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
-
-// Demo video URL from MindAR examples
-const DEMO_VIDEO_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/kanji.mp4";
-const DEMO_TARGET_URL = "/targets.mind";
+import { DEMO_VIDEO_URL, DEMO_TARGET_URL } from "@/lib/ar";
 
 // Dynamic import for ARScene (client-side only)
 const ARScene = dynamic(() => import("@/components/ar/ARScene"), {
@@ -25,7 +22,6 @@ function ARPageContent() {
   const searchParams = useSearchParams();
   const videoId = searchParams.get("vid");
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [targetUrl, setTargetUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,31 +31,26 @@ function ARPageContent() {
         setIsLoading(true);
 
         if (videoId) {
-          // Fetch signed URL for the video and target
+          // Fetch signed URL for the video
           const response = await fetch(`/api/videos/${videoId}`);
 
           if (!response.ok) {
             // If video not found, use demo video
             console.log("Video not found, using demo");
             setVideoUrl(DEMO_VIDEO_URL);
-            setTargetUrl(DEMO_TARGET_URL);
           } else {
             const data = await response.json();
             setVideoUrl(data.signedUrl);
-            // Use custom target if available, otherwise use default
-            setTargetUrl(data.targetUrl || DEMO_TARGET_URL);
           }
         } else {
           // No video ID, use demo video
           console.log("No video ID, using demo");
           setVideoUrl(DEMO_VIDEO_URL);
-          setTargetUrl(DEMO_TARGET_URL);
         }
       } catch (err) {
         console.error("Error loading video:", err);
         setError("Falha ao carregar o vídeo. Usando vídeo de demonstração.");
         setVideoUrl(DEMO_VIDEO_URL);
-        setTargetUrl(DEMO_TARGET_URL);
       } finally {
         setIsLoading(false);
       }
@@ -95,8 +86,8 @@ function ARPageContent() {
     );
   }
 
-  return videoUrl && targetUrl ? (
-    <ARScene videoUrl={videoUrl} targetUrl={targetUrl} />
+  return videoUrl ? (
+    <ARScene videoUrl={videoUrl} targetUrl={DEMO_TARGET_URL} />
   ) : null;
 }
 
