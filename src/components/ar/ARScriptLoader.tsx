@@ -22,9 +22,9 @@ interface LoadingInfo {
   error?: string;
 }
 
-// Script URLs
-const AFRAME_URL = "https://cdn.jsdelivr.net/npm/aframe@1.4.0/dist/aframe-master.min.js";
-const MINDAR_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/dist/mindar-image-aframe.prod.js";
+// Script URLs - Updated to working CDN URLs
+const AFRAME_URL = "https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js";
+const MINDAR_URL = "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.js";
 
 // Load a script dynamically
 function loadScript(src: string, id: string): Promise<void> {

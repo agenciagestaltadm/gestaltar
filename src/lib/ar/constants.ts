@@ -4,19 +4,22 @@
 /**
  * Demo target URL - Card example from MindAR
  * This is a pre-compiled .mind file that works with the demo image
+ * Updated to use master branch (working CDN URL)
  */
-export const DEMO_TARGET_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/card.mind";
+export const DEMO_TARGET_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@master/examples/image-tracking/assets/card-example/card.mind";
 
 /**
  * Demo target image URL - The image to print/scan for AR
  * Users need to point their camera at this image for AR to work
+ * Updated to use master branch (working CDN URL)
  */
-export const DEMO_TARGET_IMAGE_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/card.png";
+export const DEMO_TARGET_IMAGE_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@master/examples/image-tracking/assets/card-example/card.png";
 
 /**
  * Demo video URL - Sample video from MindAR examples
+ * Updated to use master branch (working CDN URL)
  */
-export const DEMO_VIDEO_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.0/examples/image-tracking/assets/card-example/kanji.mp4";
+export const DEMO_VIDEO_URL = "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@master/examples/image-tracking/assets/card-example/kanji.mp4";
 
 /**
  * Local target file path (if using local targets.mind)
