@@ -1,15 +1,23 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import AROverlay from "./AROverlay";
-import { DEMO_TARGET_URL, AR_CONFIG } from "@/lib/ar";
+import dynamic from "next/dynamic";
+import { DEMO_TARGET_URL, DEMO_VIDEO_URL } from "@/lib/ar";
+
+// Types for A-Frame and MindAR globals
+declare global {
+  interface Window {
+    AFRAME: any;
+    MindAR: any;
+  }
+}
 
 interface ARSceneProps {
   videoUrl: string;
   targetUrl?: string;
 }
 
-type ARState = "loading" | "requesting_permission" | "initializing" | "ready" | "error";
+type ARState = "idle" | "loading" | "requesting_permission" | "initializing" | "ready" | "error";
 
 interface ARError {
   title: string;
@@ -33,14 +41,40 @@ function detectDevice(): { isIOS: boolean; isAndroid: boolean; isMobile: boolean
   return { isIOS, isAndroid, isMobile, isSafari };
 }
 
+// Script URLs
+const AFRAME_URL = "https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js";
+const MINDAR_URL = "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.js";
+
+// Load a script dynamically
+function loadScript(src: string, id: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const existing = document.getElementById(id);
+    if (existing) {
+      resolve();
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = id;
+    script.src = src;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load: ${src}`));
+
+    document.head.appendChild(script);
+  });
+}
+
 export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
-  const [arState, setArState] = useState<ARState>("loading");
+  const [arState, setArState] = useState<ARState>("idle");
   const [isTargetFound, setIsTargetFound] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
-  const [needsUserInteraction, setNeedsUserInteraction] = useState(false);
   const [error, setError] = useState<ARError | null>(null);
   const [deviceInfo, setDeviceInfo] = useState({ isIOS: false, isAndroid: false, isMobile: false, isSafari: false });
-  const [loadingMessage, setLoadingMessage] = useState("Preparando experiência AR...");
+  const [loadingMessage, setLoadingMessage] = useState("");
+  const [scriptsLoaded, setScriptsLoaded] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<any>(null);
@@ -49,18 +83,64 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
 
   // Use demo target if no custom target provided
   const effectiveTargetUrl = targetUrl || DEMO_TARGET_URL;
+  const effectiveVideoUrl = videoUrl || DEMO_VIDEO_URL;
 
   // Detect device on mount
   useEffect(() => {
     const device = detectDevice();
     setDeviceInfo(device);
+  }, []);
 
-    if (device.isIOS) {
-      setNeedsUserInteraction(true);
+  // Load A-Frame and MindAR scripts
+  const loadScripts = useCallback(async () => {
+    setLoadingMessage("Carregando componentes AR...");
+    
+    try {
+      await loadScript(AFRAME_URL, "aframe-script");
+      setLoadingMessage("Inicializando A-Frame...");
+      
+      // Wait for A-Frame
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (window.AFRAME) {
+            resolve();
+          } else {
+            requestAnimationFrame(check);
+          }
+        };
+        check();
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      await loadScript(MINDAR_URL, "mindar-script");
+      setLoadingMessage("Inicializando MindAR...");
+
+      // Wait for MindAR
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (window.AFRAME?.components?.["mindar-image"]) {
+            resolve();
+          } else {
+            requestAnimationFrame(check);
+          }
+        };
+        check();
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      setScriptsLoaded(true);
+    } catch (err) {
+      setError({
+        title: "Erro ao carregar",
+        message: "Não foi possível carregar os componentes de AR.",
+        instructions: "Verifique sua conexão e tente novamente.",
+      });
+      setArState("error");
     }
   }, []);
 
-  // Request camera permission
+  // Request camera permission - MUST be called from user gesture
   const requestCameraPermission = useCallback(async (): Promise<boolean> => {
     setArState("requesting_permission");
     setLoadingMessage("Solicitando permissão de câmera...");
@@ -134,7 +214,7 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
     }
   }, [deviceInfo]);
 
-  // Initialize AR scene using A-Frame directly
+  // Initialize AR scene
   const initializeAR = useCallback(async () => {
     if (isInitializedRef.current) return;
     isInitializedRef.current = true;
@@ -143,24 +223,6 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
     setLoadingMessage("Inicializando realidade aumentada...");
 
     try {
-      // Wait for A-Frame and MindAR to be ready
-      await new Promise<void>((resolve, reject) => {
-        const maxWait = 15000;
-        const startTime = Date.now();
-
-        const checkReady = setInterval(() => {
-          if (typeof window !== "undefined" && window.AFRAME && window.AFRAME.components["mindar-image"]) {
-            clearInterval(checkReady);
-            resolve();
-          } else if (Date.now() - startTime > maxWait) {
-            clearInterval(checkReady);
-            reject(new Error("A-Frame/MindAR não carregou. Verifique sua conexão e desative bloqueadores de anúncios."));
-          }
-        }, 100);
-      });
-
-      setLoadingMessage("Configurando cena AR...");
-
       if (!containerRef.current) {
         throw new Error("Container não encontrado");
       }
@@ -169,16 +231,19 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
       const videoId = `ar-video-${Date.now()}`;
       const video = document.createElement("video");
       video.id = videoId;
-      video.src = videoUrl;
+      video.src = effectiveVideoUrl;
       video.preload = "auto";
       video.muted = true;
       video.playsInline = true;
       video.setAttribute("webkit-playsinline", "true");
+      video.setAttribute("playsinline", "true");
       video.loop = true;
       video.crossOrigin = "anonymous";
       video.style.display = "none";
       document.body.appendChild(video);
       videoRef.current = video;
+
+      setLoadingMessage("Configurando cena AR...");
 
       // Create A-Frame scene
       const scene = document.createElement("a-scene");
@@ -223,36 +288,22 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
 
       // Wait for scene to initialize
       await new Promise<void>((resolve) => {
-        scene.addEventListener("loaded", () => {
-          console.log("[ARScene] Scene loaded");
-          resolve();
-        });
-
-        // Fallback timeout
-        setTimeout(() => {
-          console.log("[ARScene] Scene loaded (timeout fallback)");
-          resolve();
-        }, 3000);
+        scene.addEventListener("loaded", () => resolve());
+        setTimeout(() => resolve(), 3000);
       });
 
       // Set up event listeners
-      // A-Frame scene has systems property at runtime
-      const aframeScene = scene as any;
-
-      // Listen for target found
       scene.addEventListener("targetFound", () => {
         console.log("[ARScene] Target found");
         setIsTargetFound(true);
       });
 
-      // Listen for target lost
       scene.addEventListener("targetLost", () => {
         console.log("[ARScene] Target lost");
         setIsTargetFound(false);
         setIsVideoPlaying(false);
       });
 
-      // Listen for camera errors
       scene.addEventListener("camera-error", (event: any) => {
         console.error("[ARScene] Camera error:", event);
         setError({
@@ -274,37 +325,24 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
       });
       setArState("error");
     }
-  }, [effectiveTargetUrl, videoUrl]);
+  }, [effectiveTargetUrl, effectiveVideoUrl]);
 
-  // Main initialization flow
-  useEffect(() => {
-    if (!effectiveTargetUrl || !videoUrl) return;
+  // Handle "ABRIR CÂMERA" button click - MUST be from user gesture
+  const handleOpenCamera = useCallback(async () => {
+    setArState("loading");
+    
+    // Load scripts first
+    if (!scriptsLoaded) {
+      await loadScripts();
+    }
 
-    const init = async () => {
-      setArState("loading");
+    // Request camera permission (must be from user gesture)
+    const hasPermission = await requestCameraPermission();
+    if (!hasPermission) return;
 
-      // Request camera permission first
-      const hasPermission = await requestCameraPermission();
-      if (!hasPermission) return;
-
-      // Initialize AR
-      await initializeAR();
-    };
-
-    init();
-
-    // Cleanup
-    return () => {
-      if (videoRef.current) {
-        videoRef.current.pause();
-        videoRef.current.src = "";
-        videoRef.current.remove();
-      }
-      if (sceneRef.current) {
-        sceneRef.current.remove();
-      }
-    };
-  }, [effectiveTargetUrl, videoUrl, requestCameraPermission, initializeAR]);
+    // Initialize AR
+    await initializeAR();
+  }, [scriptsLoaded, loadScripts, requestCameraPermission, initializeAR]);
 
   // Handle video play
   const handlePlayVideo = useCallback(() => {
@@ -312,21 +350,19 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
       videoRef.current.play()
         .then(() => {
           setIsVideoPlaying(true);
-          setNeedsUserInteraction(false);
         })
         .catch((err) => {
           console.error("[ARScene] Video play error:", err);
-          setNeedsUserInteraction(true);
         });
     }
   }, []);
 
   // Auto-play when target found
   useEffect(() => {
-    if (isTargetFound && !needsUserInteraction && !isVideoPlaying) {
+    if (isTargetFound && !isVideoPlaying) {
       handlePlayVideo();
     }
-  }, [isTargetFound, needsUserInteraction, isVideoPlaying, handlePlayVideo]);
+  }, [isTargetFound, isVideoPlaying, handlePlayVideo]);
 
   // Pause video when target lost
   useEffect(() => {
@@ -338,9 +374,18 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
   // Retry function
   const handleRetry = useCallback(() => {
     setError(null);
-    setArState("loading");
+    setArState("idle");
     isInitializedRef.current = false;
-    window.location.reload();
+    
+    // Clean up
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.src = "";
+      videoRef.current.remove();
+    }
+    if (sceneRef.current) {
+      sceneRef.current.remove();
+    }
   }, []);
 
   // Error state
@@ -371,6 +416,58 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
     );
   }
 
+  // Idle state - Show "ABRIR CÂMERA" button (essential for iOS)
+  if (arState === "idle") {
+    return (
+      <div className="fixed inset-0 bg-guestalt-black flex flex-col items-center justify-center p-4">
+        <div className="text-center max-w-md">
+          {/* AR Icon */}
+          <div className="w-24 h-24 rounded-full bg-white/10 flex items-center justify-center mx-auto mb-6">
+            <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </div>
+
+          <h1 className="text-white text-2xl font-bold mb-2">Realidade Aumentada</h1>
+          <p className="text-guestalt-gray-light mb-6">
+            Aponte a câmera para o quadro impresso para ver o vídeo em AR
+          </p>
+
+          {/* Main CTA Button */}
+          <button
+            onClick={handleOpenCamera}
+            className="w-full px-8 py-4 bg-white text-black rounded-full text-xl font-bold hover:bg-gray-100 transition-all active:scale-95 mb-4"
+          >
+            ABRIR CÂMERA
+          </button>
+
+          {/* iOS specific hint */}
+          {deviceInfo.isIOS && (
+            <p className="text-guestalt-gray-light text-xs mb-4">
+              Toque em "Permitir" quando solicitado
+            </p>
+          )}
+
+          {/* Instructions */}
+          <div className="mt-6 p-4 bg-white/5 rounded-lg text-left">
+            <h3 className="text-white font-medium mb-2">📋 Instruções:</h3>
+            <ol className="text-guestalt-gray-light text-sm space-y-1 list-decimal list-inside">
+              <li>Toque em "ABRIR CÂMERA"</li>
+              <li>Permita o acesso à câmera</li>
+              <li>Aponte para o quadro impresso</li>
+              <li>O vídeo aparecerá sobre o quadro!</li>
+            </ol>
+          </div>
+
+          {/* Back link */}
+          <a href="/" className="inline-block mt-6 text-guestalt-gray-light text-sm underline hover:text-white">
+            Voltar ao início
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   // Loading state
   if (arState === "loading" || arState === "requesting_permission" || arState === "initializing") {
     return (
@@ -392,13 +489,38 @@ export default function ARScene({ videoUrl, targetUrl }: ARSceneProps) {
       {/* Scene container */}
       <div ref={containerRef} className="fixed inset-0" />
 
-      {/* Overlay UI */}
-      <AROverlay
-        isTargetFound={isTargetFound}
-        isVideoPlaying={isVideoPlaying}
-        needsUserInteraction={needsUserInteraction}
-        onPlayVideo={handlePlayVideo}
-      />
+      {/* Scanning overlay */}
+      {arState === "ready" && !isTargetFound && (
+        <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-48 h-48 border-2 border-white/30 rounded-lg mx-auto mb-4 flex items-center justify-center">
+              <svg className="w-16 h-16 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <p className="text-white text-lg font-medium">Aponte para o quadro</p>
+            <p className="text-white/70 text-sm">O vídeo aparecerá automaticamente</p>
+          </div>
+        </div>
+      )}
+
+      {/* Target found indicator */}
+      {isTargetFound && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 pointer-events-none">
+          <div className="bg-green-500/80 text-white px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2">
+            <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+            Quadro detectado
+          </div>
+        </div>
+      )}
+
+      {/* Back button */}
+      <a
+        href="/"
+        className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/20 backdrop-blur-sm text-white px-6 py-3 rounded-full font-medium hover:bg-white/30 transition-colors"
+      >
+        Voltar
+      </a>
     </div>
   );
 }

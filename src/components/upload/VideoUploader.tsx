@@ -62,6 +62,13 @@ export default function VideoUploader({
   );
 
   const handleClick = useCallback(() => {
+    // No mobile, abre diretamente o seletor de arquivos
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    // Previne comportamento padrão no mobile
+    e.preventDefault();
     fileInputRef.current?.click();
   }, []);
 
@@ -82,34 +89,45 @@ export default function VideoUploader({
         </label>
         <div
           className={`
-            relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer
-            transition-all duration-200 min-h-[160px] flex flex-col items-center justify-center
+            relative border-2 border-dashed rounded-xl p-8 text-center
+            transition-all duration-200 min-h-[180px] flex flex-col items-center justify-center
             ${
               isDragging
                 ? "border-white bg-white/5"
                 : "border-guestalt-gray-medium hover:border-guestalt-gray-light"
             }
-            ${isUploading ? "pointer-events-none opacity-70" : ""}
+            ${isUploading ? "pointer-events-none opacity-70" : "cursor-pointer active:scale-[0.98]"}
           `}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={handleClick}
+          onTouchStart={handleTouchStart}
+          role="button"
+          tabIndex={0}
+          aria-label="Selecionar arquivo de vídeo"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleClick();
+            }
+          }}
         >
           <input
             ref={fileInputRef}
             type="file"
-            accept="video/mp4,video/webm,video/quicktime"
+            accept="video/mp4,video/webm,video/quicktime,video/*"
             onChange={handleFileInput}
             className="hidden"
             disabled={isUploading}
+            capture="environment"
           />
 
           {!selectedFile ? (
             <>
               <div className="mb-3 text-guestalt-gray-light">
                 <svg
-                  className="w-10 h-10 mx-auto"
+                  className="w-12 h-12 mx-auto"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -123,19 +141,29 @@ export default function VideoUploader({
                 </svg>
               </div>
 
-              <p className="text-white font-medium mb-1">
-                Arraste o vídeo aqui
+              <p className="text-white font-medium mb-1 text-lg">
+                Toque para selecionar
               </p>
-              <p className="text-guestalt-gray-light text-sm mb-3">ou</p>
-              <span className="text-white underline underline-offset-4 text-sm">
-                CLIQUE PARA SELECIONAR
+              <p className="text-guestalt-gray-light text-sm mb-3">
+                ou arraste um vídeo aqui
+              </p>
+              <span className="inline-block px-4 py-2 bg-white/10 rounded-lg text-white text-sm font-medium">
+                ESCOLHER VÍDEO
               </span>
             </>
           ) : (
             <div className="text-center">
+              <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-3">
+                <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
               <p className="text-white font-medium mb-1">{selectedFile.name}</p>
               <p className="text-guestalt-gray-light text-sm">
                 {formatFileSize(selectedFile.size)}
+              </p>
+              <p className="text-guestalt-gray-light text-xs mt-2">
+                Toque para trocar
               </p>
             </div>
           )}
@@ -165,6 +193,9 @@ export default function VideoUploader({
         <p className="text-guestalt-gray-light text-xs">
           Vídeo: <span className="text-white">MP4</span> (recomendado),{" "}
           <span className="text-white">WebM</span>, <span className="text-white">MOV</span> • Máx: <span className="text-white">200MB</span>
+        </p>
+        <p className="text-guestalt-gray-light text-xs">
+          Dica: Vídeos menores enviam mais rápido
         </p>
       </div>
     </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { DEMO_VIDEO_URL, DEMO_TARGET_URL } from "@/lib/ar";
 
@@ -19,38 +19,51 @@ const ARScene = dynamic(() => import("@/components/ar/ARScene"), {
 });
 
 function ARPageContent() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const videoId = searchParams.get("vid");
+  const params = useParams();
+  const videoId = params.id as string;
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [targetUrl, setTargetUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Redirect old format (?vid=xxx) to new format (/ar/xxx)
-    if (videoId) {
-      router.replace(`/ar/${videoId}`);
-      return;
-    }
-
-    const loadDemo = async () => {
+    const loadVideo = async () => {
       try {
         setIsLoading(true);
-        // No video ID, use demo video
-        console.log("No video ID, using demo");
+
+        if (videoId) {
+          // Fetch signed URL for the video
+          const response = await fetch(`/api/videos/${videoId}`);
+
+          if (!response.ok) {
+            // If video not found, use demo video
+            console.log("Video not found, using demo");
+            setVideoUrl(DEMO_VIDEO_URL);
+            setTargetUrl(DEMO_TARGET_URL);
+          } else {
+            const data = await response.json();
+            setVideoUrl(data.signedUrl);
+            // Use custom target if available, otherwise demo
+            setTargetUrl(data.targetUrl || DEMO_TARGET_URL);
+          }
+        } else {
+          // No video ID, use demo video
+          console.log("No video ID, using demo");
+          setVideoUrl(DEMO_VIDEO_URL);
+          setTargetUrl(DEMO_TARGET_URL);
+        }
+      } catch (err) {
+        console.error("Error loading video:", err);
+        setError("Falha ao carregar o vídeo. Usando vídeo de demonstração.");
         setVideoUrl(DEMO_VIDEO_URL);
         setTargetUrl(DEMO_TARGET_URL);
-      } catch (err) {
-        console.error("Error loading demo:", err);
-        setError("Falha ao carregar o vídeo de demonstração.");
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadDemo();
-  }, [videoId, router]);
+    loadVideo();
+  }, [videoId]);
 
   if (isLoading) {
     return (
@@ -84,7 +97,7 @@ function ARPageContent() {
   ) : null;
 }
 
-export default function ARPage() {
+export default function ARIdPage() {
   return (
     <Suspense
       fallback={

@@ -4,26 +4,28 @@ import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import VideoUploader from "./VideoUploader";
 import { Button } from "@/components/ui";
-import { compileTarget, validateImageForTracking, loadImageData } from "@/lib/mindar";
-import { compressVideo, getVideoInfo, isCompressionSupported } from "@/lib/video";
 import { trackEvent } from "@/lib/analytics";
 import { DEMO_TARGET_URL, DEMO_TARGET_IMAGE_URL } from "@/lib/ar";
 
 const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
 const MAX_TARGET_SIZE = 10 * 1024 * 1024; // 10MB
 
+// MindAR Compiler URL
+const MINDAR_COMPILER_URL = "https://hiukim.github.io/mind-ar-js-doc/tools/compile";
+
 export default function UploadForm() {
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedTargetImage, setSelectedTargetImage] = useState<File | null>(null);
+  const [mindFile, setMindFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [useCustomTarget, setUseCustomTarget] = useState(false);
   const [targetPreview, setTargetPreview] = useState<string | null>(null);
-  const [targetValidation, setTargetValidation] = useState<{ valid: boolean; message: string } | null>(null);
+  const [step, setStep] = useState<"upload" | "compile" | "final">("upload");
 
   const handleFileSelect = useCallback((file: File) => {
     setSelectedFile(file);
@@ -38,7 +40,6 @@ export default function UploadForm() {
   const handleTargetImageSelect = useCallback(async (file: File) => {
     setSelectedTargetImage(file);
     setError(null);
-    setTargetValidation(null);
 
     if (file.size > MAX_TARGET_SIZE) {
       setError("A imagem-alvo excede o tamanho máximo de 10MB.");
@@ -49,20 +50,18 @@ export default function UploadForm() {
     // Create preview
     const previewUrl = URL.createObjectURL(file);
     setTargetPreview(previewUrl);
+    
+    // Reset mind file when target image changes
+    setMindFile(null);
+  }, []);
 
-    // Validate image for tracking
-    try {
-      const imageData = await loadImageData(file);
-      const validation = validateImageForTracking(imageData);
-      setTargetValidation(validation);
-
-      if (!validation.valid) {
-        setError(validation.message);
-      }
-    } catch (err) {
-      setError("Falha ao processar imagem. Tente outra imagem.");
-      setSelectedTargetImage(null);
+  const handleMindFileSelect = useCallback((file: File) => {
+    if (!file.name.endsWith('.mind')) {
+      setError("Por favor, selecione um arquivo .mind válido.");
+      return;
     }
+    setMindFile(file);
+    setError(null);
   }, []);
 
   const handleUpload = async () => {
@@ -71,8 +70,8 @@ export default function UploadForm() {
       return;
     }
 
-    if (useCustomTarget && !selectedTargetImage) {
-      setError("Por favor, selecione uma imagem-alvo ou desative o target personalizado.");
+    if (useCustomTarget && !mindFile) {
+      setError("Por favor, faça o upload do arquivo .mind compilado.");
       return;
     }
 
@@ -82,60 +81,9 @@ export default function UploadForm() {
     trackEvent("upload_start", { customTarget: useCustomTarget });
 
     try {
-      let targetBlob: Blob | null = null;
-      let targetUrl = DEMO_TARGET_URL;
-
-      // Step 1: Generate custom target if needed
-      if (useCustomTarget && selectedTargetImage) {
-        setStatusMessage("Gerando target personalizado...");
-        setUploadProgress(5);
-
-        const targetBuffer = await compileTarget(selectedTargetImage, (progress) => {
-          setUploadProgress(5 + progress * 0.15); // 5-20%
-        });
-        targetBlob = new Blob([targetBuffer], { type: "application/octet-stream" });
-
-        setStatusMessage("Target gerado com sucesso!");
-        trackEvent("target_generated", { imageSize: selectedTargetImage.size });
-      }
-
-      // Step 2: Compress video if needed and supported
-      let videoToUpload = selectedFile;
-      const videoInfo = await getVideoInfo(selectedFile);
-
-      if (isCompressionSupported() && videoInfo.size > 50 * 1024 * 1024) {
-        setStatusMessage("Comprimindo vídeo...");
-        setUploadProgress(20);
-
-        try {
-          const result = await compressVideo(
-            selectedFile,
-            { maxSizeMB: 50, quality: "medium" },
-            (progress, stage) => {
-              setStatusMessage(stage);
-              setUploadProgress(20 + progress * 0.3); // 20-50%
-            }
-          );
-
-          videoToUpload = new File([result.blob], selectedFile.name, {
-            type: result.format === "mp4" ? "video/mp4" : "video/webm",
-          });
-
-          setStatusMessage(`Vídeo comprimido: ${Math.round(result.compressionRatio * 100)}% do tamanho original`);
-          trackEvent("video_compressed", {
-            originalSize: result.originalSize,
-            compressedSize: result.compressedSize,
-            ratio: result.compressionRatio,
-          });
-        } catch (compressError) {
-          console.warn("Video compression failed, using original:", compressError);
-          setStatusMessage("Usando vídeo original (compressão não disponível)");
-        }
-      }
-
-      // Step 3: Create video record
+      // Step 1: Create video record
       setStatusMessage("Criando registro do vídeo...");
-      setUploadProgress(50);
+      setUploadProgress(10);
 
       const createResponse = await fetch("/api/videos", {
         method: "POST",
@@ -143,11 +91,11 @@ export default function UploadForm() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          filename: videoToUpload.name,
-          mimeType: videoToUpload.type,
-          sizeBytes: videoToUpload.size,
+          filename: selectedFile.name,
+          mimeType: selectedFile.type,
+          sizeBytes: selectedFile.size,
           title: title || null,
-          hasTargetImage: useCustomTarget && !!targetBlob,
+          hasTargetImage: useCustomTarget && !!mindFile,
         }),
       });
 
@@ -158,36 +106,34 @@ export default function UploadForm() {
 
       const { videoId, uploadUrl, targetUploadUrl } = await createResponse.json();
 
-      // Step 4: Upload target file if custom
-      if (useCustomTarget && targetBlob && targetUploadUrl) {
+      // Step 2: Upload target file if custom
+      if (useCustomTarget && mindFile && targetUploadUrl) {
         setStatusMessage("Enviando target personalizado...");
-        setUploadProgress(55);
+        setUploadProgress(20);
 
         const targetUploadResponse = await fetch(targetUploadUrl, {
           method: "PUT",
           headers: {
             "Content-Type": "application/octet-stream",
           },
-          body: targetBlob,
+          body: mindFile,
         });
 
         if (!targetUploadResponse.ok) {
           console.warn("Target upload failed, using demo target");
-        } else {
-          targetUrl = `${window.location.origin}/api/targets/${videoId}`;
         }
       }
 
-      // Step 5: Upload video with progress
+      // Step 3: Upload video with progress
       setStatusMessage("Enviando vídeo...");
-      setUploadProgress(60);
+      setUploadProgress(30);
 
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
 
         xhr.upload.addEventListener("progress", (event) => {
           if (event.lengthComputable) {
-            const progress = 60 + (event.loaded / event.total) * 35; // 60-95%
+            const progress = 30 + (event.loaded / event.total) * 60; // 30-90%
             setUploadProgress(Math.round(progress));
           }
         });
@@ -205,11 +151,11 @@ export default function UploadForm() {
         });
 
         xhr.open("PUT", uploadUrl);
-        xhr.setRequestHeader("Content-Type", videoToUpload.type);
-        xhr.send(videoToUpload);
+        xhr.setRequestHeader("Content-Type", selectedFile.type);
+        xhr.send(selectedFile);
       });
 
-      // Step 6: Update video status
+      // Step 4: Update video status
       setStatusMessage("Finalizando...");
       setUploadProgress(95);
 
@@ -236,6 +182,12 @@ export default function UploadForm() {
       setStatusMessage("");
     }
   };
+
+  // Open MindAR compiler in new tab
+  const openCompiler = useCallback(() => {
+    window.open(MINDAR_COMPILER_URL, '_blank', 'noopener,noreferrer');
+    setStep("compile");
+  }, []);
 
   return (
     <div className="w-full max-w-lg mx-auto">
@@ -264,7 +216,15 @@ export default function UploadForm() {
           <input
             type="checkbox"
             checked={useCustomTarget}
-            onChange={(e) => setUseCustomTarget(e.target.checked)}
+            onChange={(e) => {
+              setUseCustomTarget(e.target.checked);
+              if (!e.target.checked) {
+                setSelectedTargetImage(null);
+                setMindFile(null);
+                setTargetPreview(null);
+                setStep("upload");
+              }
+            }}
             disabled={isUploading}
             className="w-5 h-5 rounded border-guestalt-gray-medium bg-guestalt-surface text-white focus:ring-white"
           />
@@ -279,74 +239,132 @@ export default function UploadForm() {
 
       {/* Target Image Upload (if custom) */}
       {useCustomTarget && (
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-guestalt-gray-light mb-2">
-            Imagem-alvo (quadro) *
-          </label>
-          <div
-            className={`
-              relative border-2 border-dashed rounded-xl p-6 text-center cursor-pointer
-              transition-all duration-200 min-h-[120px] flex flex-col items-center justify-center
-              ${isUploading ? "pointer-events-none opacity-70" : "hover:border-guestalt-gray-light"}
-              ${selectedTargetImage ? "border-green-500/50" : "border-guestalt-gray-medium"}
-            `}
-            onClick={() => {
-              if (!isUploading) {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = "image/png,image/jpeg,image/webp";
-                input.onchange = (e) => {
-                  const files = (e.target as HTMLInputElement).files;
-                  if (files && files[0]) {
-                    handleTargetImageSelect(files[0]);
+        <div className="mb-6 space-y-4">
+          {/* Step 1: Upload target image */}
+          <div className="p-4 bg-guestalt-surface rounded-lg border border-guestalt-gray-medium">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="w-6 h-6 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold">1</span>
+              <span className="text-white font-medium">Selecione a imagem do quadro</span>
+            </div>
+            
+            <div
+              className={`
+                relative border-2 border-dashed rounded-xl p-4 text-center cursor-pointer
+                transition-all duration-200 min-h-[100px] flex flex-col items-center justify-center
+                ${isUploading ? "pointer-events-none opacity-70" : "hover:border-guestalt-gray-light"}
+                ${selectedTargetImage ? "border-green-500/50" : "border-guestalt-gray-medium"}
+              `}
+              onClick={() => {
+                if (!isUploading) {
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.accept = "image/png,image/jpeg,image/webp";
+                  input.onchange = (e) => {
+                    const files = (e.target as HTMLInputElement).files;
+                    if (files && files[0]) {
+                      handleTargetImageSelect(files[0]);
+                    }
+                  };
+                  input.click();
+                }
+              }}
+            >
+              {targetPreview ? (
+                <div className="text-center">
+                  <img
+                    src={targetPreview}
+                    alt="Preview"
+                    className="w-24 h-24 object-cover rounded-lg mx-auto mb-2"
+                  />
+                  <p className="text-white text-sm">{selectedTargetImage?.name}</p>
+                </div>
+              ) : (
+                <>
+                  <svg className="w-8 h-8 text-guestalt-gray-light mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <p className="text-white text-sm">Clique para selecionar</p>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Step 2: Compile button */}
+          {selectedTargetImage && (
+            <div className="p-4 bg-guestalt-surface rounded-lg border border-guestalt-gray-medium">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-6 h-6 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold">2</span>
+                <span className="text-white font-medium">Compile o target</span>
+              </div>
+              
+              <p className="text-guestalt-gray-light text-sm mb-3">
+                Clique no botão abaixo para abrir o compilador do MindAR. Faça upload da imagem e baixe o arquivo <strong>.mind</strong> gerado.
+              </p>
+              
+              <button
+                onClick={openCompiler}
+                className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                ABRIR COMPILADOR MINDAR
+              </button>
+            </div>
+          )}
+
+          {/* Step 3: Upload .mind file */}
+          {selectedTargetImage && (
+            <div className="p-4 bg-guestalt-surface rounded-lg border border-guestalt-gray-medium">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-6 h-6 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold">3</span>
+                <span className="text-white font-medium">Faça upload do arquivo .mind</span>
+              </div>
+              
+              <div
+                className={`
+                  relative border-2 border-dashed rounded-xl p-4 text-center cursor-pointer
+                  transition-all duration-200 min-h-[80px] flex flex-col items-center justify-center
+                  ${isUploading ? "pointer-events-none opacity-70" : "hover:border-guestalt-gray-light"}
+                  ${mindFile ? "border-green-500/50" : "border-guestalt-gray-medium"}
+                `}
+                onClick={() => {
+                  if (!isUploading) {
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = ".mind,application/octet-stream";
+                    input.onchange = (e) => {
+                      const files = (e.target as HTMLInputElement).files;
+                      if (files && files[0]) {
+                        handleMindFileSelect(files[0]);
+                      }
+                    };
+                    input.click();
                   }
-                };
-                input.click();
-              }
-            }}
-          >
-            {targetPreview ? (
-              <div className="text-center">
-                <img
-                  src={targetPreview}
-                  alt="Preview"
-                  className="w-32 h-32 object-cover rounded-lg mx-auto mb-2"
-                />
-                <p className="text-white text-sm">{selectedTargetImage?.name}</p>
-                {targetValidation && (
-                  <p className={`text-xs mt-1 ${targetValidation.valid ? "text-green-500" : "text-red-500"}`}>
-                    {targetValidation.message}
-                  </p>
+                }}
+              >
+                {mindFile ? (
+                  <div className="text-center">
+                    <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-2">
+                      <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <p className="text-white text-sm">{mindFile.name}</p>
+                    <p className="text-green-500 text-xs mt-1">Arquivo válido!</p>
+                  </div>
+                ) : (
+                  <>
+                    <svg className="w-8 h-8 text-guestalt-gray-light mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <p className="text-white text-sm">Clique para enviar o .mind</p>
+                    <p className="text-guestalt-gray-light text-xs mt-1">Baixado do compilador</p>
+                  </>
                 )}
               </div>
-            ) : (
-              <>
-                <svg
-                  className="w-8 h-8 text-guestalt-gray-light mb-2"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                  />
-                </svg>
-                <p className="text-white text-sm font-medium">
-                  Clique para selecionar a imagem
-                </p>
-                <p className="text-guestalt-gray-light text-xs mt-1">
-                  PNG, JPG ou WebP (máx. 10MB)
-                </p>
-              </>
-            )}
-          </div>
-          <p className="text-guestalt-gray-light text-xs mt-2">
-            Esta imagem será usada como referência para o AR. O vídeo aparecerá sobre ela.
-            Use imagens com bom contraste e detalhes para melhor tracking.
-          </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -399,7 +417,7 @@ export default function UploadForm() {
       <div className="mt-6">
         <Button
           onClick={handleUpload}
-          disabled={!selectedFile || (useCustomTarget && !selectedTargetImage) || isUploading}
+          disabled={!selectedFile || (useCustomTarget && !mindFile) || isUploading}
           isLoading={isUploading}
           fullWidth
           size="lg"
